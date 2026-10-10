@@ -3,11 +3,12 @@
 A personal study repo for growing from a strong Linux/DevOps practitioner into an
 L5 (staff-level) DevOps engineer across **AWS, Azure and general DevOps tooling**.
 
-It has two parts:
+It has three parts:
 
 | File | What it is |
 |------|------------|
 | [`L5-DevOps-Mastery-Roadmap.md`](L5-DevOps-Mastery-Roadmap.md) | The study plan: a layered roadmap with 7 phases, from cloud core up to architecture and leadership. |
+| [`nginx-podip/`](nginx-podip/README.md) | Lab exercise: nginx load-balanced over 5 pods, with a page that shows which pod's IP served each request. |
 | [`kindctl.sh`](kindctl.sh) | A hands-on lab: one Bash script that builds and runs three local Kubernetes clusters (`dev`, `stg`, `prod`) with [kind](https://kind.sigs.k8s.io/), so you can practise what the roadmap covers. |
 
 ---

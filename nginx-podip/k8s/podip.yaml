@@ -1,0 +1,101 @@
+# 5 nginx pods behind one Service, exposed through ingress-nginx.
+#   Deployment  -> runs and keeps 5 replicas alive
+#   Service     -> one stable virtual IP that spreads traffic over the pods
+#   Ingress     -> routes http://podip.localhost:<port>/ into the Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podip
+  labels:
+    app: podip
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: podip
+  template:
+    metadata:
+      labels:
+        app: podip
+    spec:
+      # Spread the 5 pods across worker nodes instead of piling onto one.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: podip
+      containers:
+        - name: nginx
+          image: podip-nginx:1.0
+          # The image is side-loaded with `kind load`, never pulled from a
+          # registry; IfNotPresent keeps kubelet from trying.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          # Downward API: Kubernetes injects the pod's own identity.
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: podip
+spec:
+  type: ClusterIP
+  selector:
+    app: podip
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: podip
+spec:
+  ingressClassName: nginx
+  rules:
+    # *.localhost resolves to 127.0.0.1 in browsers and curl, so no
+    # /etc/hosts edit is needed. A host rule also avoids clashing with the
+    # catch-all "/" route that `kindctl.sh smoke` creates.
+    - host: podip.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: podip
+                port:
+                  name: http

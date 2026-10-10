@@ -1,0 +1,51 @@
+# Rendered at container start by the nginx image's entrypoint
+# (/docker-entrypoint.d/20-envsubst-on-templates.sh): every ${VAR} that is set
+# in the environment is substituted, everything else (like $uri) is left alone.
+# POD_NAME / POD_IP / NODE_NAME come from the Kubernetes downward API.
+server {
+    listen 80;
+    server_name _;
+
+    # Never let the browser cache the answer, or a refresh would keep showing
+    # the same pod instead of the next one the load balancer picks.
+    add_header Cache-Control "no-store" always;
+
+    # Browser view.
+    location = / {
+        default_type text/html;
+        return 200 '<!doctype html>
+<html><head><meta charset="utf-8"><title>${POD_NAME}</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0;
+         display: grid; place-items: center; height: 100vh; margin: 0; }
+  .card { background: #1e293b; padding: 2rem 3rem; border-radius: 12px; }
+  h1 { margin: 0 0 1rem; font-size: 1.2rem; color: #94a3b8; }
+  .ip { font-size: 3rem; font-weight: 700; color: #38bdf8; }
+  td { padding: .2rem 1rem .2rem 0; }
+</style></head>
+<body><div class="card">
+  <h1>Served by pod</h1>
+  <div class="ip">${POD_IP}</div>
+  <table>
+    <tr><td>Pod</td><td>${POD_NAME}</td></tr>
+    <tr><td>Node</td><td>${NODE_NAME}</td></tr>
+    <tr><td>Client</td><td>$remote_addr</td></tr>
+  </table>
+  <p>Refresh to hit another pod.</p>
+</div></body></html>
+';
+    }
+
+    # Plain text, handy for curl loops.
+    location = /ip {
+        default_type text/plain;
+        return 200 '${POD_IP} ${POD_NAME} ${NODE_NAME}\n';
+    }
+
+    # Probe endpoint.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 'ok\n';
+    }
+}
