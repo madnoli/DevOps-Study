@@ -6,7 +6,8 @@
 #   ./kindctl.sh init              # (re)generate dev/stg/prod.yaml configs
 #   ./kindctl.sh docker            # install docker engine for the detected OS
 #   ./kindctl.sh tune              # host sysctl tuning (run once, needs sudo)
-#   ./kindctl.sh tools             # kubectl, oc, helm, kubectx/kubens + completions
+#   ./kindctl.sh tools             # kubectl, oc, helm, kubectx/kubens, krew + completions
+#   ./kindctl.sh krew              # krew + kubectl plugins only (re-run to update)
 #   ./kindctl.sh upgrade           # install latest kind -> latest node image
 #   ./kindctl.sh up                # create + ingress, all clusters (idempotent)
 #   ./kindctl.sh up dev            # just one
@@ -650,7 +651,8 @@ install_shell_extras() {
   if ! dpkg -s bash-completion >/dev/null 2>&1; then
     $SUDO apt-get update -qq && $SUDO apt-get install -y -qq bash-completion
   fi
-  $SUDO apt-get install -y -qq jq fzf >/dev/null 2>&1 || warn "  jq/fzf install skipped"
+  # git is needed by krew to fetch its plugin index.
+  $SUDO apt-get install -y -qq jq fzf git >/dev/null 2>&1 || warn "  jq/fzf/git install skipped"
 
   $SUDO mkdir -p /etc/bash_completion.d
 
@@ -689,6 +691,12 @@ case "$PS1" in
   *) PS1='$(kube_ctx)'"$PS1" ;;
 esac
 
+# krew installs plugins per user; put that user's plugin bin dir on PATH.
+case ":$PATH:" in
+  *":${KREW_ROOT:-$HOME/.krew}/bin:"*) ;;
+  *) export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH" ;;
+esac
+
 # Make aliases inherit the full completion of the command they wrap.
 if type __start_kubectl >/dev/null 2>&1; then
   complete -o default -F __start_kubectl k
@@ -700,6 +708,99 @@ EOF
   ok "  /etc/profile.d/kube-tools.sh"
 }
 
+# --- krew + kubectl plugins --------------------------------------------------
+
+# krew is the plugin manager for kubectl: `kubectl krew install <name>` adds a
+# new `kubectl <name>` subcommand. Override the set with e.g.
+#   KREW_PLUGINS="neat tree stern" ./kindctl.sh krew
+# Browse everything available with:  kubectl krew search
+KREW_PLUGINS="${KREW_PLUGINS:-\
+neat tree stern view-secret images get-all lineage explore blame \
+resource-capacity node-shell df-pv \
+who-can access-matrix rbac-tool whoami \
+outdated deprecations popeye score \
+konfig}"
+
+# krew lives in a per-user directory (~/.krew), so under `sudo` it must be
+# installed for the person who ran sudo, not for root - otherwise their own
+# shell never sees the plugins.
+krew_user() {
+  if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" && "$SUDO_USER" != root ]]; then
+    echo "$SUDO_USER"
+  else
+    id -un
+  fi
+}
+
+as_krew_user() {
+  local u; u=$(krew_user)
+  if [[ "$u" == "$(id -un)" ]]; then "$@"; else sudo -u "$u" -H "$@"; fi
+}
+
+install_krew() {
+  command -v kubectl >/dev/null || { warn "krew needs kubectl - run tools first"; return 1; }
+  command -v git     >/dev/null || { warn "krew needs git - install git, then re-run"; return 1; }
+
+  local user home root
+  user=$(krew_user)
+  home=$(getent passwd "$user" | cut -d: -f6)
+  root="${KREW_ROOT:-${home}/.krew}"
+
+  # Every krew call runs as the target user with that user's krew on PATH.
+  krew() {
+    as_krew_user env KREW_ROOT="$root" PATH="${root}/bin:$PATH" kubectl krew "$@"
+  }
+
+  if [[ -x "${root}/bin/kubectl-krew" ]]; then
+    log "krew (already installed for $user, upgrading)"
+    krew update >/dev/null 2>&1 || warn "  krew index update failed"
+    krew upgrade krew >/dev/null 2>&1 || true
+  else
+    log "krew (installing for $user into $root)"
+    # Download and run the bootstrap as the target user, so ~/.krew ends up
+    # owned by them and they can add plugins later without sudo.
+    as_krew_user env KREW_ROOT="$root" bash -c '
+      set -euo pipefail
+      d=$(mktemp -d); trap "rm -rf \"$d\"" EXIT; cd "$d"
+      k="krew-linux_$1"
+      curl -fsSLO "https://github.com/kubernetes-sigs/krew/releases/latest/download/${k}.tar.gz"
+      tar -xzf "${k}.tar.gz"
+      "./${k}" install krew >/dev/null 2>&1
+    ' _ "$ARCH_GO" || { warn "  krew download/install failed"; return 1; }
+  fi
+  ok "  $(krew version 2>/dev/null | awk '/GitTag/ {print "krew " $2}')"
+
+  # Install what is missing, one plugin at a time, so a single plugin with no
+  # build for this OS/arch does not abort the rest.
+  local installed p
+  installed=$(krew list 2>/dev/null | awk '{print $1}')
+  local -a failed=()
+  for p in $KREW_PLUGINS; do
+    if grep -qx "$p" <<< "$installed"; then
+      ok "  plugin $p (present)"
+    elif krew install "$p" </dev/null >/dev/null 2>&1; then
+      ok "  plugin $p"
+    else
+      failed+=("$p")
+      warn "  plugin $p failed"
+    fi
+  done
+
+  # Converge to latest, same policy as the rest of the toolchain.
+  krew upgrade >/dev/null 2>&1 || warn "  some plugins could not be upgraded"
+
+  (( ${#failed[@]} == 0 )) || warn "  retry later with: $0 krew   (failed: ${failed[*]})"
+  [[ "$user" == "$(id -un)" ]] || ok "  installed for user '$user' (not root)"
+}
+
+cmd_krew() {
+  detect_env
+  install_krew || true
+  echo
+  warn "open a new shell, or run:  source /etc/profile.d/kube-tools.sh"
+  warn "then try:  kubectl krew list   |   kubectl tree deploy podip"
+}
+
 cmd_tools() {
   detect_env
 
@@ -709,6 +810,7 @@ cmd_tools() {
   install_oc         || true
   install_kubectx    || true
   install_shell_extras
+  install_krew       || true
 
   echo
   log "installed"
@@ -868,6 +970,7 @@ case "${1:-}" in
   docker)  shift; cmd_docker ;;
   tune)    shift; tune ;;
   tools)   shift; cmd_tools ;;
+  krew)    shift; cmd_krew ;;
   upgrade) shift; cmd_upgrade ;;
   create)  shift; cmd_create  "$@" ;;
   up)      shift; cmd_up      "$@" ;;
