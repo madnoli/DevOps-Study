@@ -100,7 +100,8 @@ curl localhost:8080          # dev  -> nginx welcome page
 | `init [--force] [cluster…]` | Generate `dev.yaml` / `stg.yaml` / `prod.yaml` kind configs from the tables in the script |
 | `docker` | Install Docker Engine from Docker's official repo for the detected OS |
 | `tune` | Write host sysctl settings: inotify watches/instances and ARP GC thresholds |
-| `tools` | Install the newest kubectl, kind, helm, oc, kubectx/kubens, plus shell aliases and completions |
+| `tools` | Install the newest kubectl, kind, helm, oc, kubectx/kubens, krew and kubectl plugins, plus shell aliases and completions |
+| `krew` | Install or update only krew and the kubectl plugins. Safe to re-run. |
 | `upgrade` | Update kind to the latest release. Its default node image updates with it. |
 | `up [cluster…]` | Create the cluster(s) and install ingress, then run `verify` |
 | `create [cluster…]` | Create the cluster only, without ingress |
@@ -140,7 +141,44 @@ recreate the clusters with `destroy` followed by `up`.
 - **One alias per cluster:** `kdev`, `kstg`, `kprod`. Each one names its context explicitly, so you can't apply to the wrong cluster by accident.
 - **A prompt prefix** that shows the current kube context.
 
+It also puts `~/.krew/bin` on your `PATH`, so kubectl plugins work in every shell.
+
 To use them, open a new shell or run `source /etc/profile.d/kube-tools.sh`.
+
+### kubectl plugins (krew)
+
+**krew** is the plugin manager for kubectl. Each plugin adds a new
+`kubectl <name>` command. `tools` and `krew` install this set:
+
+| Area | Plugin | What it does | Try |
+|------|--------|--------------|-----|
+| Everyday | `neat` | Strips clutter (status, managed fields) from YAML output | `kubectl get deploy podip -o yaml \| kubectl neat` |
+| | `tree` | Shows what owns what: Deployment → ReplicaSet → Pods | `kubectl tree deploy podip` |
+| | `stern` | Follows logs from many pods at once, colour-coded | `kubectl stern podip` |
+| | `view-secret` | Decodes a Secret's base64 values | `kubectl view-secret <name>` |
+| | `images` | Lists every container image running in the cluster | `kubectl images -A` |
+| | `get-all` | Lists *really* every resource, not just what `get all` shows | `kubectl get-all -n default` |
+| | `lineage` | Shows how resources relate to each other | `kubectl lineage deploy/podip` |
+| | `explore` | Interactive, fuzzy-search version of `kubectl explain` | `kubectl explore` |
+| | `blame` | Shows who or what changed each field of a resource | `kubectl blame deploy podip` |
+| Capacity | `resource-capacity` | CPU and memory requests and limits per node | `kubectl resource-capacity` |
+| | `node-shell` | Opens a root shell on a node | `kubectl node-shell dev-worker` |
+| | `df-pv` | Disk usage of PersistentVolumes | `kubectl df-pv` |
+| Security / RBAC | `who-can` | Who is allowed to do an action | `kubectl who-can delete pods` |
+| | `access-matrix` | Your permissions as a table | `kubectl access-matrix` |
+| | `rbac-tool` | Visualise and audit RBAC | `kubectl rbac-tool lookup` |
+| | `whoami` | Which identity your kubeconfig is using | `kubectl whoami` |
+| Hygiene | `outdated` | Running images that have newer versions | `kubectl outdated` |
+| | `deprecations` | APIs that a future Kubernetes version removes | `kubectl deprecations` |
+| | `popeye` | Scans the cluster for misconfigurations | `kubectl popeye` |
+| | `score` | Static checks of manifests before you apply them | `kubectl score nginx-podip/k8s/podip.yaml` |
+| Kubeconfig | `konfig` | Merge, split and export kubeconfig files | `kubectl konfig export kind-dev` |
+
+Notes:
+- **Choose your own set** with `KREW_PLUGINS="neat tree stern" ./kindctl.sh krew`. To see all of the 300+ plugins available, run `kubectl krew search`.
+- **krew is per user.** When you run `sudo ./kindctl.sh tools`, krew is installed into *your* `~/.krew`, not root's, so you can add plugins later without sudo: `kubectl krew install <name>`.
+- **krew needs `git`.** `tools` installs it on Debian/Ubuntu. On other distros, install git first.
+- **A failed plugin doesn't stop the rest.** The script lists any plugin that failed at the end. Run `./kindctl.sh krew` again to retry.
 
 > Note: `oc` works against kind for the standard verbs (`get`, `apply`, `logs`, …).
 > OpenShift-only commands such as `oc new-app` or `oc get route` need a real
